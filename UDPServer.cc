@@ -1,12 +1,14 @@
 // server code for UDP socket programming
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
+#include <stdint.h>
+#include <errno.h>
+#include <pthread.h>
+#include <assert.h>
+#include <fcntl.h>
+#include <strings.h>
+#include "rudp.h"
+#include "UDPServer.h"
 
 #define IP_PROTOCOL 0
 #define PORT_NO 15050
@@ -15,105 +17,97 @@
 #define sendrecvflag 0
 #define nofile "File Not Found!"
 
-// funtion to clear buffer
-void clearBuf(char* b)
-{
-    int i;
-    for (i = 0; i < NET_BUF_SIZE; i++)
-        b[i] = '\0';
-}
+/* Globals */
+server_params_t *serv_params;
 
-// funtion to encrypt
-char Cipher(char ch)
+/*
+ * read_server_params
+ *
+ * Read the input parameters for the server from the file server.in
+ */
+static int
+read_server_params (rudp_srv_state_t *rudp_srv_state)
 {
-    return ch ^ cipherKey;
-}
+    // int fd, val, lineno = 1;
+    // char buf[MAXLINE];
+    //
+    // /* Open the input file */
+    // fd = open(SERVER_INPUT, O_RDONLY);
+    // if (!fd) {
+    //     return -1;
+    // }
+    //
+    // /* Read the parameters one line at a time */
+    // bzero(serv_params, sizeof(server_params_t));
+    // bzero(rudp_srv_state, sizeof(rudp_srv_state_t));
+    // bzero(buf, MAXLINE);
+    // while (readline(fd, buf, MAXLINE)) {
+    //     val = atoi(buf);
+    //     if (val == 0) {
+    //         return -1;
+    //     }
+    //
+    //     if (lineno == 1) {
+    //         serv_params->port = val;
+    //     } else if (lineno == 2) {
+    //         rudp_srv_state->max_cwnd_size = val;
+    //     }
+    //     lineno++;
+    //     bzero(buf, MAXLINE);
+    // }
 
-// funtion sending file
-int sendFile(FILE* fp, char* buf, int s)
-{
-    int i, len;
-    if (fp == NULL) {
-        strcpy(buf, nofile);
-        len = strlen(nofile);
-        buf[len] = EOF;
-        for (i = 0; i <= len; i++)
-            buf[i] = Cipher(buf[i]);
-        return 1;
-    }
+    serv_params->port = 9281;
+    rudp_srv_state->max_cwnd_size = 1000;
 
-    char ch, ch2;
-    for (i = 0; i < s; i++) {
-        ch = fgetc(fp);
-        ch2 = Cipher(ch);
-        buf[i] = ch2;
-        if (ch == EOF)
-            return 1;
-    }
+    printf("\nSERVER PARAMS:\n");
+    printf("port: %d\n", serv_params->port);
+    printf("sending window size: %d\n", rudp_srv_state->max_cwnd_size);
+
     return 0;
 }
 
-// driver code
-int main()
+/* Main entry point */
+int
+main (int argc, char *argv[])
 {
-    int sockfd, nBytes;
-    struct sockaddr_in addr_con;
-    socklen_t addrlen = sizeof(addr_con);
-    addr_con.sin_family = AF_INET;
-    addr_con.sin_port = htons(PORT_NO);
-    addr_con.sin_addr.s_addr = INADDR_ANY;
-    char net_buf[NET_BUF_SIZE];
-    FILE* fp;
+    int ret;
+    rudp_srv_state_t rudp_srv_state;
 
-    // socket()
-    sockfd = socket(AF_INET, SOCK_DGRAM, IP_PROTOCOL);
-
-    if (sockfd < 0)
-        printf("\nfile descriptor not received!!\n");
-    else
-        printf("\nfile descriptor %d received\n", sockfd);
-
-    // bind()
-    if (bind(sockfd, (struct sockaddr*)&addr_con, sizeof(addr_con)) == 0)
-        printf("\nSuccessfully binded!\n");
-    else
-        printf("\nBinding Failed!\n");
-
-    while (1) {
-        printf("\nWaiting for file name...\n");
-
-        // receive file name
-        clearBuf(net_buf);
-
-        nBytes = recvfrom(sockfd, net_buf,
-                          NET_BUF_SIZE, sendrecvflag,
-                          (struct sockaddr*)&addr_con, &addrlen);
-
-        fp = fopen(net_buf, "r");
-        printf("\nFile Name Received: %s\n", net_buf);
-        if (fp == NULL)
-            printf("\nFile open failed!\n");
-        else
-            printf("\nFile Successfully opened!\n");
-
-        while (1) {
-
-            // process
-            if (sendFile(fp, net_buf, NET_BUF_SIZE)) {
-                sendto(sockfd, net_buf, NET_BUF_SIZE,
-                       sendrecvflag,
-                    (struct sockaddr*)&addr_con, addrlen);
-                break;
-            }
-
-            // send
-            sendto(sockfd, net_buf, NET_BUF_SIZE,
-                   sendrecvflag,
-                (struct sockaddr*)&addr_con, addrlen);
-            clearBuf(net_buf);
-        }
-        if (fp != NULL)
-            fclose(fp);
+    /* Sanity check */
+    if (argc != 1) {
+        printf("usage: ./server\n");
+        return -1;
     }
+
+    /* Register for SIGCHLD */
+    // signal(SIGCHLD, sigchild_handler);
+
+    /* Initialize the structure for holding server parameters */
+    serv_params = (server_params_t *)malloc(sizeof(server_params_t));
+    if (!serv_params) {
+        printf("main: failed to initialize server parameters\n");
+        return -1;
+    }
+
+    /* Read the server parameters from server.in */
+    ret = read_server_params(&rudp_srv_state);
+    if (ret != 0) {
+        printf("main: failed to read server parameters from server.in\n");
+        return -1;
+    }
+
+    /* Initialize the RUDP library */
+    ret = rudp_srv_init(&rudp_srv_state);
+    if (ret != 0) {
+        printf("main: failed to initialize the RUDP library\n");
+        return -1;
+    }
+
+    /* Setup connections on all the interfaces */
+    // init_listening_sockets();
+    //
+    // /* Monitor the created sockets using select */
+    // conn_listen();
+
     return 0;
 }

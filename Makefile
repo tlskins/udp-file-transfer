@@ -7,7 +7,7 @@ OBJDIR = obj
 
 default: $(TARGET)
 
-OBJECTS = $(OBJDIR)/UDPServer.o $(OBJDIR)/UDPClient.o
+OBJECTS = $(OBJDIR)/UDPServer.o $(OBJDIR)/UDPClient.o $(OBJDIR)/rudp.o
 
 $(OBJDIR)/%.o: %.cc
 	@mkdir -p $(OBJDIR)
@@ -18,11 +18,11 @@ $(OBJDIR)/%.o: %.cc
 $(TARGET): $(OBJECTS)
 	$(CC) $(OBJECTS) -g $(LIBS) -o $@
 
-UDPServer: obj/UDPServer.o
-	$(CC) $(OBJDIR)/UDPServer.o -g $(LIBS) -o $@
+UDPServer: obj/UDPServer.o obj/rudp.o
+	$(CC) $(OBJDIR)/UDPServer.o $(OBJDIR)/rudp.o -g $(LIBS) -o $@
 
-UDPClient: obj/UDPClient.o
-	$(CC) $(OBJDIR)/UDPClient.o -g $(LIBS) -o $@
+UDPClient: obj/UDPClient.o obj/rudp.o
+	$(CC) $(OBJDIR)/UDPClient.o $(OBJDIR)/rudp.o -g $(LIBS) -o $@
 
 clean:
 	rm -rf $(OBJDIR)/*.o
