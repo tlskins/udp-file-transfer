@@ -8,26 +8,11 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "rudp.h"
+
 #define IP_PROTOCOL 0
-#define PORT_NO 15050
 #define NET_BUF_SIZE 32
-#define cipherKey 'S'
 #define sendrecvflag 0
-#define nofile "File Not Found!"
-
-// funtion to clear buffer
-void clearBuf(char* b)
-{
-    int i;
-    for (i = 0; i < NET_BUF_SIZE; i++)
-        b[i] = '\0';
-}
-
-// funtion to encrypt
-char Cipher(char ch)
-{
-    return ch ^ cipherKey;
-}
 
 // funtion sending file
 int sendFile(FILE* fp, char* buf, int s)
@@ -54,30 +39,11 @@ int sendFile(FILE* fp, char* buf, int s)
 }
 
 // driver code
-int main()
+int main(int argc, char* argv[])
 {
-    int sockfd, nBytes;
-    struct sockaddr_in addr_con;
-    socklen_t addrlen = sizeof(addr_con);
-    addr_con.sin_family = AF_INET;
-    addr_con.sin_port = htons(PORT_NO);
-    addr_con.sin_addr.s_addr = INADDR_ANY;
-    char net_buf[NET_BUF_SIZE];
-    FILE* fp;
+    int sockfd;
 
-    // socket()
-    sockfd = socket(AF_INET, SOCK_DGRAM, IP_PROTOCOL);
-
-    if (sockfd < 0)
-        printf("\nfile descriptor not received!!\n");
-    else
-        printf("\nfile descriptor %d received\n", sockfd);
-
-    // bind()
-    if (bind(sockfd, (struct sockaddr*)&addr_con, sizeof(addr_con)) == 0)
-        printf("\nSuccessfully binded!\n");
-    else
-        printf("\nBinding Failed!\n");
+    sockfd = serverInit();
 
     while (1) {
         printf("\nWaiting for file name...\n");
