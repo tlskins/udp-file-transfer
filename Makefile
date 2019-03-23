@@ -1,29 +1,27 @@
-TARGET = UDPServer UDPClient
+TARGETS = ncp rcv
 LIBS =
 CC = g++
 CFLAGS = -g -Wall
 OBJDIR = obj
+CMNOBJ = $(OBJDIR)/rudp.o
+NCPOBJS = $(OBJDIR)/ncp.o $(CMNOBJ)
+RCVOBJS = $(OBJDIR)/rcv.o $(CMNOBJ)
 .PHONY: default all clean
 
-default: $(TARGET)
-
-OBJECTS = $(OBJDIR)/UDPServer.o $(OBJDIR)/UDPClient.o
+default: $(TARGETS)
 
 $(OBJDIR)/%.o: %.cc
 	@mkdir -p $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-#.PRECIOUS: $(TARGET)
+.PRECIOUS: $(TARGET)
 
-$(TARGET): $(OBJECTS)
-	$(CC) $(OBJECTS) -g $(LIBS) -o $@
+ncp: $(NCPOBJS)
+	$(CC) $(NCPOBJS) -g $(LIBS) -o $@
 
-UDPServer: obj/UDPServer.o
-	$(CC) $(OBJDIR)/UDPServer.o -g $(LIBS) -o $@
-
-UDPClient: obj/UDPClient.o
-	$(CC) $(OBJDIR)/UDPClient.o -g $(LIBS) -o $@
+rcv: $(RCVOBJS)
+	$(CC) $(RCVOBJS) -g $(LIBS) -o $@
 
 clean:
 	rm -rf $(OBJDIR)/*.o
-	rm -f $(TARGET)
+	rm -f $(TARGETS)

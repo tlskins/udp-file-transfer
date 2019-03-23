@@ -6,15 +6,13 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <unistd.h>
+#include <unistd.h>             // getopt()
 
-#define IP_PROTOCOL 0
+#include "rudp.h"
+
 #define IP_ADDRESS "127.0.0.1" // localhost
-#define PORT_NO 15050
-#define NET_BUF_SIZE 32
-#define cipherKey 'S'
-#define sendrecvflag 0
 
+/*
 // funtion to clear buffer
 void clearBuf(char* b)
 {
@@ -44,7 +42,21 @@ int recvFile(char* buf, int s)
     }
     return 0;
 }
+*/
 
+int main(int argc, char* argv[])
+{
+    int sockfd;
+
+    sockfd = serverInit();
+
+    serverListen(sockfd);
+
+    return (0);
+
+}
+
+/*
 // driver code
 int main()
 {
@@ -91,3 +103,4 @@ int main()
     }
     return 0;
 }
+*/
