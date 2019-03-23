@@ -6,8 +6,10 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/stat.h>       // stat()
 #include <unistd.h>
 #include <netdb.h>          // hostent
+#include <errno.h>          // error
 
 #include "rudp.h"
 
@@ -50,6 +52,7 @@ int serverListen(int sockfd)
 {
     MessageRecord       msgRcd;
     int                 nBytes;
+    int                 fsize;
     uint32_t            msg_type;
     struct sockaddr_in  addr_con;
     socklen_t           addrlen = sizeof(addr_con);
@@ -59,13 +62,16 @@ int serverListen(int sockfd)
         fprintf(stderr, "rcv: calling recvfrom() ...\n");
         nBytes = recvfrom(sockfd, &msgRcd, sizeof(MessageRecord), sendrecvflag,
             (struct sockaddr*) &addr_con, &addrlen);
+        if (nBytes == (-1)){
+            fprintf(stderr, "ncv: ERROR: recvfrom() return (%d}\n", errno);
+            exit(1);
+        }
         msg_type = ntohl(msgRcd.msg_type);
-        fprintf(stderr, "rev: receive %d bytes with message type : %s\n",
-            nBytes, getMessageType(msg_type));
     } while(msg_type != MSG_TYPE_FILENAME);
 
-    printf("Receive a file name: %s from %s port %d\n",
-           (char*) msgRcd.data,
+    fsize = ntohl(msgRcd.seq);
+    printf("rcv: Receive %d bytes, file name: %s, size %d from %s port %d\n",
+           nBytes, (char*) msgRcd.data, fsize,
            inet_ntop(AF_INET, &addr_con.sin_addr, buf, INET_ADDRSTRLEN),
            ntohs(addr_con.sin_port));
 
@@ -197,18 +203,29 @@ int sendFileName(int sockfd, char* localFileName, char* remoteFileName)
     int                 nBytes;
     MessageRecord       msgRcd;
     FILE*               fp;
+    struct stat         statbuf;
+    int                 ret;
     
     fp = fopen(localFileName, "r");
     if (fp == NULL){
         fprintf(stderr, "ERROR: local file name '%s' doesn't exist\n", localFileName);
         exit (1);
     }
+    ret = stat(localFileName, &statbuf);
+    if (ret != 0){
+        fprintf(stderr, "ERROR: Cannot get file '%s' stat (%d)\n", localFileName, errno);
+        exit(1);
+    }
+    nBytes = statbuf.st_size;
+    fprintf(stderr, "ncp: file '%s' size '%d'\n", localFileName, nBytes);
 
+    // pass the message type, remote file name and file size (in seq) to server
     memset(&msgRcd, 0, sizeof(MessageRecord));
     msgRcd.msg_type = htonl(MSG_TYPE_FILENAME);
+    msgRcd.seq = htonl(nBytes);
     strcpy((char*) msgRcd.data, remoteFileName);
     // pass remote file name to server with send()
-    fprintf(stderr, "ncp: calling send() to send file name '%s'\n", remoteFileName);
+    fprintf(stderr, "ncp: calling send() to send file name '%s' information\n", remoteFileName);
     nBytes = send(sockfd, &msgRcd, sizeof(MessageRecord), sendrecvflag);
     if (nBytes == (-1)){
         fprintf(stderr, "ERROR: cannot send file name '%s' to server\n", remoteFileName);
