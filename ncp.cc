@@ -18,32 +18,6 @@ char        localFileName[BUFFSIZE];
 char        remoteFileName[BUFFSIZE];
 char        remoteMachine[BUFFSIZE];
 
-/*
-// funtion sending file
-int sendFile(FILE* fp, char* buf, int s)
-{
-    int i, len;
-    if (fp == NULL) {
-        strcpy(buf, nofile);
-        len = strlen(nofile);
-        buf[len] = EOF;
-        for (i = 0; i <= len; i++)
-            buf[i] = Cipher(buf[i]);
-        return 1;
-    }
-
-    char ch, ch2;
-    for (i = 0; i < s; i++) {
-        ch = fgetc(fp);
-        ch2 = Cipher(ch);
-        buf[i] = ch2;
-        if (ch == EOF)
-            return 1;
-    }
-    return 0;
-}
-*/
-
 void usage(char* av)
 {
         fprintf(stderr, "%s <source_file_name> <dest_file_name> @ <comp_name>\n", av);
@@ -77,53 +51,16 @@ int processingArgv(int argc, char* argv[])
 int main(int argc, char* argv[])
 {
     int             sockfd;
+    FILE*           fp;
+    int             fsize;
 
     processingArgv(argc, argv);
 
     sockfd = clientInit(remoteMachine);
     
-    sendFileName(sockfd, localFileName, remoteFileName);
+    fp = sendFileName(sockfd, localFileName, remoteFileName, &fsize);
 
-    exit(0);
-/*
-
-    while (1) {
-        printf("\nWaiting for file name...\n");
-
-        // receive file name
-        clearBuf(net_buf);
-
-        nBytes = recvfrom(sockfd, net_buf,
-                          NET_BUF_SIZE, sendrecvflag,
-                          (struct sockaddr*)&addr_con, &addrlen);
-
-        fp = fopen(net_buf, "r");
-        printf("\nFile Name Received: %s\n", net_buf);
-        if (fp == NULL)
-            printf("\nFile open failed!\n");
-        else
-            printf("\nFile Successfully opened!\n");
-
-        while (1) {
-
-            // process
-            if (sendFile(fp, net_buf, NET_BUF_SIZE)) {
-                sendto(sockfd, net_buf, NET_BUF_SIZE,
-                       sendrecvflag,
-                    (struct sockaddr*)&addr_con, addrlen);
-                break;
-            }
-
-            // send
-            sendto(sockfd, net_buf, NET_BUF_SIZE,
-                   sendrecvflag,
-                (struct sockaddr*)&addr_con, addrlen);
-            clearBuf(net_buf);
-        }
-        if (fp != NULL)
-            fclose(fp);
-    }
-*/
+    sendFileData(sockfd, fp);
 
     return 0;
 }

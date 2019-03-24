@@ -10,47 +10,18 @@
 
 #include "rudp.h"
 
-#define IP_ADDRESS "127.0.0.1" // localhost
-
-/*
-// funtion to clear buffer
-void clearBuf(char* b)
-{
-    int i;
-    for (i = 0; i < NET_BUF_SIZE; i++)
-        b[i] = '\0';
-}
-
-// function for decryption
-char Cipher(char ch)
-{
-    return ch ^ cipherKey;
-}
-
-// function to receive file
-int recvFile(char* buf, int s)
-{
-    int i;
-    char ch;
-    for (i = 0; i < s; i++) {
-        ch = buf[i];
-        ch = Cipher(ch);
-        if (ch == EOF)
-            return 1;
-        else
-            printf("%c", ch);
-    }
-    return 0;
-}
-*/
-
 int main(int argc, char* argv[])
 {
-    int sockfd;
+    int         sockfd;
+    int         fsize;
 
     sockfd = serverInit();
 
-    serverListen(sockfd);
+    fsize = serverListen(sockfd);
+
+    fsize = receiveFileData(sockfd, fsize);
+
+    fprintf(stderr, "rcv: after received file left %d bytes\n", fsize);
 
     return (0);
 

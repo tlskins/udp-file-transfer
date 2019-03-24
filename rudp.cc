@@ -29,6 +29,10 @@ typedef struct _MessageRecord {
     uint8_t         data[databuffersize];
 } MessageRecord;
 
+struct sockaddr_in  curr_addr;
+static int          currentClient = 0;
+char                fileName[databuffersize];
+
 const char* getMessageType(uint32_t i)
 {
     switch(i){
@@ -48,6 +52,56 @@ const char* getMessageType(uint32_t i)
     }
 }
 
+int receiveFileData(int sockfd, int fsize)
+{
+    int                 receiveSeq;
+    int                 dataSize;
+    char*               data;
+    int                 port;
+    int                 nBytes;
+    MessageRecord       msgRcd;
+    uint32_t            msg_type;
+    struct sockaddr_in  addr_con;
+    socklen_t           addrlen = sizeof(addr_con);
+    char                buf[INET_ADDRSTRLEN];
+
+    while(fsize > 0){
+        fprintf(stderr, "rcv: calling recvfrom() ...\n");
+        nBytes = recvfrom(sockfd, &msgRcd, sizeof(MessageRecord), sendrecvflag,
+            (struct sockaddr*) &addr_con, &addrlen);
+        if (nBytes == (-1)){
+            fprintf(stderr, "ncv: ERROR: recvfrom() return (%d}\n", errno);
+            exit(1);
+        }
+        msg_type = ntohl(msgRcd.msg_type);
+        receiveSeq = ntohl(msgRcd.seq);
+        dataSize = ntohl(msgRcd.datasize);
+        data = (char*) msgRcd.data;
+        inet_ntop(AF_INET, &addr_con.sin_addr, buf, INET_ADDRSTRLEN);
+        port = ntohs(addr_con.sin_port);
+        fsize -= dataSize;
+        fprintf(stderr, "rcv: type %s, receive %d bytes, sequence (%d) from '%s' "
+                        "port %d, expect %d more\n",
+                        getMessageType(msg_type),
+                        dataSize, receiveSeq, buf, port, fsize);
+    }
+
+    return (fsize);
+}
+
+int sameClient(struct sockaddr_in* addr_con)
+{
+    int ret = memcmp(&curr_addr, &addr_con, sizeof(struct sockaddr_in));
+    if (ret != 0){
+        // this is a new client, save the client into linked-list and telling it to wait
+        fprintf(stderr, "rcv: ERROR: new client (ask to wait and saved to linked-list\n");
+        return (0);
+    }else{
+        return (1);
+    }
+}
+
+// return the transmitted file size so server can count the left size
 int serverListen(int sockfd)
 {
     MessageRecord       msgRcd;
@@ -69,15 +123,25 @@ int serverListen(int sockfd)
         msg_type = ntohl(msgRcd.msg_type);
     } while(msg_type != MSG_TYPE_FILENAME);
 
+    // save file size and name
     fsize = ntohl(msgRcd.seq);
+    strcpy(fileName, (char*) msgRcd.data);
     printf("rcv: Receive %d bytes, file name: %s, size %d from %s port %d\n",
            nBytes, (char*) msgRcd.data, fsize,
            inet_ntop(AF_INET, &addr_con.sin_addr, buf, INET_ADDRSTRLEN),
            ntohs(addr_con.sin_port));
 
-    // check to see if addr_con is a new one
-
-    return (0);
+    // remember my current client so we know are we deal with the same client
+    if (currentClient == 0){
+        memcpy(&curr_addr, &addr_con, sizeof(struct sockaddr_in));
+        currentClient++;
+    }else if (currentClient == 1){
+        // are we deal with the same client
+        if (sameClient(&addr_con) == 0){
+            exit(1);
+        }
+    }
+    return (fsize);
 }
 
 int serverInit()
@@ -94,6 +158,10 @@ int serverInit()
     }
 
     fprintf(stderr, "rcv: Created a file descriptor %d\n", sockfd);
+
+    // zero curr_addr which is the curren client
+    memset(&curr_addr, 0, sizeof(struct sockaddr_in));
+    memset(fileName, 0, databuffersize);
 
     memset(&addr_con, 0, sizeof(struct sockaddr_in));
     addr_con.sin_family = AF_INET;
@@ -198,7 +266,7 @@ int clientInit(char* serverName)
     return (sockfd);
 }
 
-int sendFileName(int sockfd, char* localFileName, char* remoteFileName)
+FILE* sendFileName(int sockfd, char* localFileName, char* remoteFileName, int* fsize)
 {
     int                 nBytes;
     MessageRecord       msgRcd;
@@ -217,6 +285,7 @@ int sendFileName(int sockfd, char* localFileName, char* remoteFileName)
         exit(1);
     }
     nBytes = statbuf.st_size;
+    *fsize = nBytes;
     fprintf(stderr, "ncp: file '%s' size '%d'\n", localFileName, nBytes);
 
     // pass the message type, remote file name and file size (in seq) to server
@@ -231,8 +300,45 @@ int sendFileName(int sockfd, char* localFileName, char* remoteFileName)
         fprintf(stderr, "ERROR: cannot send file name '%s' to server\n", remoteFileName);
         exit(1);
     }
-    return (0);
+    return (fp);
 }
 
+int sendFileData(int sockfd, FILE* fp)
+{
+    MessageRecord       msgRcd;
+    int                 nBytes;
+    struct stat         statbuf;
+    int                 ret;
+    uint32_t            seq = 0;
+    int                 endOfFile = 0;
+    int                 totalBytes = 0;
+    
+    do {
+        seq++;
+        memset(&msgRcd, 0, sizeof(MessageRecord));
+        msgRcd.msg_type = htonl(MSG_TYPE_FILE_DATA);
+        msgRcd.seq = htonl(seq);
+        nBytes = fread(&msgRcd.data[0], sizeof(uint8_t), databuffersize, fp);
+        if (nBytes != databuffersize){
+            if (feof(fp) == 0){
+                fprintf(stderr, "ncp: ERROR read file, buffer size (%d), reaed (%d)\n",
+                    databuffersize, nBytes);
+                exit(1);
+            }
+            endOfFile = 1;
+        }
+        msgRcd.datasize = htonl(nBytes);
+        totalBytes += nBytes;
+        
+        // we has nBytes in the buffer, send it out
+        fprintf(stderr, "ncp: send() (%d) bytes to server\n", nBytes);
+        nBytes = send(sockfd, &msgRcd, sizeof(MessageRecord), sendrecvflag);
+        if (nBytes == (-1)){
+            fprintf(stderr, "ERROR: cannot send data to server\n");
+            exit(1);
+        }
+    }while(endOfFile != 1);
 
-
+    fprintf(stderr, "ncp: send (%d) bytes to server\n", totalBytes);
+    return (totalBytes);
+}
