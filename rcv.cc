@@ -17,12 +17,11 @@ int main(int argc, char* argv[])
 
     sockfd = serverInit();
 
-    fsize = serverListen(sockfd);
-
-    fsize = receiveFileData(sockfd, fsize);
-
-    fprintf(stderr, "rcv: after received file left %d bytes\n", fsize);
+    do {
+        fsize = serverListen(sockfd);
+        fsize = receiveFileData(sockfd, fsize);
+        fprintf(stderr, "rcv: after received file left %d bytes\n", fsize);
+    } while (1);
 
     return (0);
-
 }

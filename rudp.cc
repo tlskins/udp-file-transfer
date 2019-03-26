@@ -157,6 +157,8 @@ int receiveFileData(int sockfd, int fsize)
     MessageRecord       msgRcd;
     DataRecord*         pdataRecord;
     struct sockaddr_in  addr_con;
+    FILE*               fp = NULL;
+    int                 nBytes;
 
     // use receiveListen client information saved at 
     memcpy(&addr_con, &curr_addr, sizeof(struct sockaddr_in));
@@ -164,6 +166,20 @@ int receiveFileData(int sockfd, int fsize)
         fprintf(stderr, "rcv:receiveFileData: calling rudpRecvfrom() ...\n");
         pdataRecord = rudpRecvfrom(sockfd, &msgRcd, &addr_con);
         fsize -= pdataRecord->datasize;
+        if (fp == NULL){
+            fp = fopen(fileName, "w");
+            if (fp == NULL){
+                fprintf(stderr, "rcv:receiveFileData: cannot open file '%s' for write\n",
+                    fileName);
+                exit (1);
+            }
+        }
+        nBytes = fwrite(pdataRecord->data, 1, pdataRecord->datasize, fp);
+        if (nBytes != pdataRecord->datasize){
+            fprintf(stderr, "rcv:receiveFileData: suppose to write %d bytes but "
+                " written %d bytes\n", pdataRecord->datasize, nBytes);
+            exit(1);
+        }
 
         // send ack back to client
         memset(&msgRcd, 0, sizeof(MessageRecord));
@@ -172,6 +188,14 @@ int receiveFileData(int sockfd, int fsize)
         fprintf(stderr, "rcv:receiveFileData: calling rudpSendTo() to send ACK for seq (%d)\n",
             pdataRecord->seq);
         rudpSendTo(sockfd, &msgRcd, &addr_con);
+    }
+    
+    // reset the curr_addr and counter
+    currentClient--;
+    memset(&curr_addr, 0, sizeof(struct sockaddr_in));
+    if (fp != NULL){
+        fclose(fp);
+        fp = NULL;
     }
     fprintf(stderr, "rcv: receive whole file\n");
     return (fsize);
