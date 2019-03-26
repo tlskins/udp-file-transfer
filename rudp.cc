@@ -20,8 +20,10 @@
 #define MSG_TYPE_FILENAME               1
 #define MSG_TYPE_FILE_DATA              2
 #define MSG_TYPE_FILE_END               3
-#define MSG_TYPE_ACK                    4
-#define MSG_TYPE_ERROR_INVALID_FILE     5
+#define MSG_TYPE_FILE_START             4
+#define MSG_TYPE_FILE_STOP              5
+#define MSG_TYPE_ACK                    6
+#define MSG_TYPE_INVALID                7
 
 typedef struct _MessageRecord {
     uint32_t        msg_type;
@@ -44,6 +46,31 @@ struct sockaddr_in  curr_addr;
 static int          currentClient = 0;
 char                fileName[databuffersize];
 
+const char* getMessageType(uint32_t i)
+{
+    switch(i){
+    case MSG_TYPE_FILENAME:
+        return ("MSG_TYPE_FILENAME");
+        break;
+    case MSG_TYPE_FILE_DATA:
+        return ("MSG_TYPE_FILE_DATA");
+        break;
+    case MSG_TYPE_FILE_END:
+        return ("MSG_TYPE_FILE_END");
+        break;
+    case MSG_TYPE_FILE_START:
+        return ("MSG_TYPE_FILE_START");
+        break;
+    case MSG_TYPE_FILE_STOP:
+        return ("MSG_TYPE_FILE_STOP");
+        break;
+    case MSG_TYPE_ACK:
+        return ("MSG_TYPE_ACK");
+        break;
+    default:
+        return ("MSG_TYPE_INVALID");
+    }
+}
 void convertfrom(MessageRecord* pmsgRcd, struct sockaddr_in* paddr_con, DataRecord *pdataRecord)
 {
     char                buf[INET_ADDRSTRLEN];
@@ -76,24 +103,6 @@ void freeDataRecord(DataRecord* p)
     }
 }
 
-const char* getMessageType(uint32_t i)
-{
-    switch(i){
-    case MSG_TYPE_FILENAME:
-        return ("MSG_TYPE_FILENAME");
-        break;
-    case MSG_TYPE_FILE_DATA:
-        return ("MSG_TYPE_FILE_DATA");
-        break;
-    case MSG_TYPE_ACK:
-        return ("MSG_TYPE_ACK");
-        break;
-    case MSG_TYPE_ERROR_INVALID_FILE:
-        return ("MSG_TYPE_ERROR_INVALID_FILE");
-    default:
-        return ("MSG_TYPE_INVALID");
-    }
-}
 
 DataRecord* rudpRecvfrom(int sockfd, MessageRecord* pmsgRcd, struct sockaddr_in* paddr_rev)
 {
@@ -213,6 +222,15 @@ int sameClient(struct sockaddr_in* addr_con)
     }
 }
 
+int rudpSendFileStartStop(MessageRecord* pmsgRcd, int msg_type, int sockfd, struct sockaddr_in* paddr_con)
+{
+    memset(pmsgRcd, 0, sizeof(MessageRecord));
+    pmsgRcd->msg_type = htonl(msg_type);
+    fprintf(stderr, "rcv:rudpSendFileStartStop: calling rudpSendTo() to send (%s) ...\n",
+        getMessageType(msg_type));
+    return rudpSendTo(sockfd, pmsgRcd, paddr_con);
+}
+
 // return the transmitted file size so server can count the left size
 int serverListen(int sockfd)
 {
@@ -243,15 +261,17 @@ int serverListen(int sockfd)
            inet_ntop(AF_INET, &addr_con.sin_addr, buf, INET_ADDRSTRLEN),
            ntohs(addr_con.sin_port));
 
-    // remember my current client so we know are we deal with the same client
+    // remember my current client so we know we are dealng with the same client
     if (currentClient == 0){
         memcpy(&curr_addr, &addr_con, sizeof(struct sockaddr_in));
         currentClient++;
-    }else if (currentClient == 1){
-        // are we deal with the same client
-        if (sameClient(&addr_con) == 0){
-            exit(1);
-        }
+        rudpSendFileStartStop(&msgRcd, MSG_TYPE_FILE_START, sockfd, &addr_con);
+    }else if (currentClient == 1 && sameClient(&addr_con) == 1){
+        // we deal with the same client, send FILE_START back to client
+        rudpSendFileStartStop(&msgRcd, MSG_TYPE_FILE_START, sockfd, &addr_con);
+    }else{
+        // a new client, send FILE_STOP back to client
+        rudpSendFileStartStop(&msgRcd, MSG_TYPE_FILE_STOP, sockfd, &addr_con);
     }
     return (fsize);
 }
@@ -385,6 +405,8 @@ FILE* sendFileName(int sockfd, char* localFileName, char* remoteFileName, int* f
     FILE*               fp;
     struct stat         statbuf;
     int                 ret;
+    struct sockaddr_in  addr_rec;
+    DataRecord*         pDataRecord = NULL;
     
     fp = fopen(localFileName, "r");
     if (fp == NULL){
@@ -412,6 +434,15 @@ FILE* sendFileName(int sockfd, char* localFileName, char* remoteFileName, int* f
         fprintf(stderr, "ERROR: cannot send file name '%s' to server\n", remoteFileName);
         exit(1);
     }
+
+    // wait for MSG_TYPE_FILE_START
+    do{
+        // this is client so we don't care who sent data to us, ignore addr_rec
+        fprintf(stderr, "ncp:sendFileName: entering rudpRecvfrom() ...\n");
+        pDataRecord = rudpRecvfrom(sockfd, &msgRcd, &addr_rec);
+        fprintf(stderr, "ncp:sendFileName: rudprecvfrom type %s, seq (%d)\n",
+            getMessageType(pDataRecord->msg_type), pDataRecord->seq);
+    }while (pDataRecord->msg_type != MSG_TYPE_FILE_START);
     return (fp);
 }
 
