@@ -19,8 +19,9 @@
 
 #define MSG_TYPE_FILENAME               1
 #define MSG_TYPE_FILE_DATA              2
-#define MSG_TYPE_ACKNOWLEDGEMENT        3
-#define MSG_TYPE_ERROR_INVALID_FILE     4
+#define MSG_TYPE_FILE_END               3
+#define MSG_TYPE_ACK                    4
+#define MSG_TYPE_ERROR_INVALID_FILE     5
 
 typedef struct _MessageRecord {
     uint32_t        msg_type;
@@ -29,9 +30,51 @@ typedef struct _MessageRecord {
     uint8_t         data[databuffersize];
 } MessageRecord;
 
+typedef struct _DataRecord {
+    int                     msg_type;
+    unsigned int            seq;
+    int                     datasize;
+    void*                   data;
+    struct sockaddr_in*     addr_con;
+    char*                   ip;
+    int                     port;
+} DataRecord;
+
 struct sockaddr_in  curr_addr;
 static int          currentClient = 0;
 char                fileName[databuffersize];
+
+void convertfrom(MessageRecord* pmsgRcd, struct sockaddr_in* paddr_con, DataRecord *pdataRecord)
+{
+    char                buf[INET_ADDRSTRLEN];
+
+    memset(pdataRecord, 0, sizeof(DataRecord));
+    pdataRecord->msg_type = ntohl(pmsgRcd->msg_type);
+    pdataRecord->seq = ntohl(pmsgRcd->seq);
+    pdataRecord->datasize = ntohl(pmsgRcd->datasize);
+    pdataRecord->data = &pmsgRcd->data[0];
+    pdataRecord->addr_con = (struct sockaddr_in *) malloc(sizeof(struct sockaddr_in));
+    memcpy(pdataRecord->addr_con, paddr_con, sizeof(struct sockaddr_in));
+    inet_ntop(AF_INET, &((*paddr_con).sin_addr), buf, INET_ADDRSTRLEN);
+    pdataRecord->ip = (char*) malloc(strlen(buf) + 1);
+    strcpy(pdataRecord->ip, buf);
+    pdataRecord->port = ntohs(paddr_con->sin_port);
+}
+
+void freeDataRecord(DataRecord* p)
+{
+    if (p != NULL){
+        if (p->ip != NULL){
+            free(p->ip);
+            p->ip = NULL;
+        }
+        if (p->addr_con != NULL){
+            free(p->addr_con);
+            p->addr_con = NULL;
+        }
+        free(p);
+    }
+}
 
 const char* getMessageType(uint32_t i)
 {
@@ -42,8 +85,8 @@ const char* getMessageType(uint32_t i)
     case MSG_TYPE_FILE_DATA:
         return ("MSG_TYPE_FILE_DATA");
         break;
-    case MSG_TYPE_ACKNOWLEDGEMENT:
-        return ("MSG_TYPE_ACKNOWLEDGEMENT");
+    case MSG_TYPE_ACK:
+        return ("MSG_TYPE_ACK");
         break;
     case MSG_TYPE_ERROR_INVALID_FILE:
         return ("MSG_TYPE_ERROR_INVALID_FILE");
@@ -52,40 +95,148 @@ const char* getMessageType(uint32_t i)
     }
 }
 
+DataRecord* rudpRecvfrom(int sockfd, MessageRecord* pmsgRcd, struct sockaddr_in* paddr_rev)
+{
+    int                 nBytes;
+    socklen_t           addrlen = sizeof(struct sockaddr_in);
+    DataRecord*         pDataRecord = NULL;
+
+    fprintf(stderr, "rudp:rudpRecvfrom: calling recvfrom() ...\n");
+    nBytes = recvfrom(sockfd, pmsgRcd, sizeof(MessageRecord), sendrecvflag,
+        (sockaddr*) paddr_rev, &addrlen);
+    if (nBytes == (-1)){
+        fprintf(stderr, "rudp:rudpRecvfrom: ERROR: recvfrom() return (%d}\n", errno);
+        exit(0);
+    }
+    pDataRecord = (DataRecord*) malloc(sizeof(DataRecord));
+    convertfrom(pmsgRcd, paddr_rev, pDataRecord);
+    fprintf(stderr, "rcv:rudpRecvfrom: type %s, receive %d bytes, sequence (%d) from '%s' port %d\n",
+            getMessageType(pDataRecord->msg_type),
+            pDataRecord->datasize, pDataRecord->seq,
+            pDataRecord->ip, pDataRecord->port);
+    return (pDataRecord);
+}
+
+// return -1 if error
+int rudpSend(int sockfd, MessageRecord* pmsgRcd)
+{
+    int                 nBytes;
+    
+    fprintf(stderr, "rudpSend: calling send() to send\n");
+    nBytes = send(sockfd, pmsgRcd, sizeof(MessageRecord), sendrecvflag);
+    if (nBytes == (-1)){
+        fprintf(stderr, "rudpSend:ERROR: cannot send\n");
+        exit(nBytes);
+    }
+    return (nBytes);
+}
+
+int rudpSendTo(int sockfd, MessageRecord* pmsgRcd, struct sockaddr_in* paddr_con)
+{
+    int                 nBytes;
+    socklen_t           addrlen = sizeof(struct sockaddr);
+    char                buf[INET_ADDRSTRLEN];
+    struct sockaddr_in  sockaddr_local;
+    
+    memcpy(&sockaddr_local, paddr_con, sizeof(struct sockaddr));
+    inet_ntop(AF_INET, &sockaddr_local.sin_addr, buf, INET_ADDRSTRLEN);
+
+    fprintf(stderr, "rudpSendTo: calling sendto() to send to '%s', port %d\n",
+        buf, ntohs(sockaddr_local.sin_port));
+    nBytes = sendto(sockfd, pmsgRcd, sizeof(MessageRecord), sendrecvflag,
+                (struct sockaddr*) &sockaddr_local, addrlen);
+    if (nBytes == (-1)){
+        fprintf(stderr, "rudpSendTo:ERROR: cannot send\n");
+        exit(nBytes);
+    }
+    return (nBytes);
+}
+
 int receiveFileData(int sockfd, int fsize)
 {
-    int                 receiveSeq;
-    int                 dataSize;
-    char*               data;
-    int                 port;
-    int                 nBytes;
     MessageRecord       msgRcd;
-    uint32_t            msg_type;
+    DataRecord*         pdataRecord;
     struct sockaddr_in  addr_con;
-    socklen_t           addrlen = sizeof(addr_con);
-    char                buf[INET_ADDRSTRLEN];
 
+    // use receiveListen client information saved at 
+    memcpy(&addr_con, &curr_addr, sizeof(struct sockaddr_in));
     while(fsize > 0){
-        fprintf(stderr, "rcv: calling recvfrom() ...\n");
-        nBytes = recvfrom(sockfd, &msgRcd, sizeof(MessageRecord), sendrecvflag,
-            (struct sockaddr*) &addr_con, &addrlen);
-        if (nBytes == (-1)){
-            fprintf(stderr, "ncv: ERROR: recvfrom() return (%d}\n", errno);
-            exit(1);
-        }
-        msg_type = ntohl(msgRcd.msg_type);
-        receiveSeq = ntohl(msgRcd.seq);
-        dataSize = ntohl(msgRcd.datasize);
-        data = (char*) msgRcd.data;
-        inet_ntop(AF_INET, &addr_con.sin_addr, buf, INET_ADDRSTRLEN);
-        port = ntohs(addr_con.sin_port);
-        fsize -= dataSize;
-        fprintf(stderr, "rcv: type %s, receive %d bytes, sequence (%d) from '%s' "
-                        "port %d, expect %d more\n",
-                        getMessageType(msg_type),
-                        dataSize, receiveSeq, buf, port, fsize);
-    }
+        fprintf(stderr, "rcv:receiveFileData: calling rudpRecvfrom() ...\n");
+        pdataRecord = rudpRecvfrom(sockfd, &msgRcd, &addr_con);
+        fsize -= pdataRecord->datasize;
 
+        // send ack back to client
+        memset(&msgRcd, 0, sizeof(MessageRecord));
+        msgRcd.msg_type = htonl(MSG_TYPE_ACK);
+        msgRcd.seq = htonl(pdataRecord->seq);
+        fprintf(stderr, "rcv:receiveFileData: calling rudpSendTo() to send ACK for seq (%d)\n",
+            pdataRecord->seq);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        sleep(1);
+        rudpSendTo(sockfd, &msgRcd, &addr_con);
+        exit(1);
+    }
+    fprintf(stderr, "rcv: receive whole file\n");
     return (fsize);
 }
 
@@ -113,7 +264,7 @@ int serverListen(int sockfd)
     char                buf[INET_ADDRSTRLEN];
 
     do{
-        fprintf(stderr, "rcv: calling recvfrom() ...\n");
+        fprintf(stderr, "rcv:serverListen: calling recvfrom() ...\n");
         nBytes = recvfrom(sockfd, &msgRcd, sizeof(MessageRecord), sendrecvflag,
             (struct sockaddr*) &addr_con, &addrlen);
         if (nBytes == (-1)){
@@ -126,7 +277,7 @@ int serverListen(int sockfd)
     // save file size and name
     fsize = ntohl(msgRcd.seq);
     strcpy(fileName, (char*) msgRcd.data);
-    printf("rcv: Receive %d bytes, file name: %s, size %d from %s port %d\n",
+    printf("rcv:serverListen: Receive %d bytes, file name: %s, size %d from %s port %d\n",
            nBytes, (char*) msgRcd.data, fsize,
            inet_ntop(AF_INET, &addr_con.sin_addr, buf, INET_ADDRSTRLEN),
            ntohs(addr_con.sin_port));
@@ -295,7 +446,7 @@ FILE* sendFileName(int sockfd, char* localFileName, char* remoteFileName, int* f
     strcpy((char*) msgRcd.data, remoteFileName);
     // pass remote file name to server with send()
     fprintf(stderr, "ncp: calling send() to send file name '%s' information\n", remoteFileName);
-    nBytes = send(sockfd, &msgRcd, sizeof(MessageRecord), sendrecvflag);
+    nBytes = rudpSend(sockfd, &msgRcd);
     if (nBytes == (-1)){
         fprintf(stderr, "ERROR: cannot send file name '%s' to server\n", remoteFileName);
         exit(1);
@@ -306,12 +457,12 @@ FILE* sendFileName(int sockfd, char* localFileName, char* remoteFileName, int* f
 int sendFileData(int sockfd, FILE* fp)
 {
     MessageRecord       msgRcd;
+    DataRecord*         pdataRecord;
     int                 nBytes;
-    struct stat         statbuf;
-    int                 ret;
     uint32_t            seq = 0;
     int                 endOfFile = 0;
     int                 totalBytes = 0;
+    struct sockaddr_in  addr_rec;
     
     do {
         seq++;
@@ -327,15 +478,29 @@ int sendFileData(int sockfd, FILE* fp)
             }
             endOfFile = 1;
         }
+        if (endOfFile == 1){
+            msgRcd.msg_type = htonl(MSG_TYPE_FILE_END);
+        }
         msgRcd.datasize = htonl(nBytes);
         totalBytes += nBytes;
         
         // we has nBytes in the buffer, send it out
-        fprintf(stderr, "ncp: send() (%d) bytes to server\n", nBytes);
-        nBytes = send(sockfd, &msgRcd, sizeof(MessageRecord), sendrecvflag);
+        fprintf(stderr, "ncp:sendFileData: rudpSend() (%d) bytes, sequence (%d) to server\n",
+            nBytes, seq);
+        nBytes = rudpSend(sockfd, &msgRcd);
         if (nBytes == (-1)){
-            fprintf(stderr, "ERROR: cannot send data to server\n");
+            fprintf(stderr, "ERROR: rudpSend() cannot send data to server\n");
             exit(1);
+        }
+        pdataRecord = rudpRecvfrom(sockfd, &msgRcd, &addr_rec);
+        fprintf(stderr, "ncp:sendFileData: rudprecvfrom type %s, seq (%d)\n",
+            getMessageType(pdataRecord->msg_type), pdataRecord->seq);
+        if (pdataRecord->msg_type != MSG_TYPE_ACK){
+            if (pdataRecord->seq != seq){
+                fprintf(stderr, "ncp: ERROR exptect seq (%d) but receive (%d)\n",
+                    seq, pdataRecord->seq);
+                exit(1);
+            }
         }
     }while(endOfFile != 1);
 

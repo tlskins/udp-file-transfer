@@ -25,3 +25,6 @@ rcv: $(RCVOBJS)
 clean:
 	rm -rf $(OBJDIR)/*.o
 	rm -f $(TARGETS)
+
+run:
+	@echo "run './rcv' in one terminal and run './ncp atestfile a @ u2' in another terminal"
