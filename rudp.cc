@@ -42,9 +42,49 @@ typedef struct _DataRecord {
     int                     port;
 } DataRecord;
 
+typedef struct _ClientList{
+    struct sockaddr_in* client;
+    int                 fsize;
+    char*               fileName;
+    struct _ClientList* next;
+} ClientList;
+
 struct sockaddr_in  curr_addr;
 static int          currentClient = 0;
 char                fileName[databuffersize];
+static ClientList   g_ClientList = NULL;
+
+void addClient(struct sockaddr_in* paddr_con, int fsize, char* fileName)
+{
+    ClientList*     p = (ClientList*) malloc(sizeof(ClientList));
+    memset(p, 0, sizeof(ClientList));
+    p->client = (struct sockaddr_in*) malloc(sizeof(struct sockaddr_in));
+    memcpy(p->client, paddr_con, sizeof(struct sockaddr_in));
+    p->fsize = fsize;
+    p->fileName = (char*) malloc(strlen(fileName) + 1);
+    strcpy(p->fileName, fileName);
+    if (g_ClientList == NULL){
+        g_ClientList = p;
+    }else{
+        p->next = g_ClientList;
+        g_ClientList = p;
+    }
+}
+
+ClientList* removeClient()
+{
+    ClientList*     p = g_ClientList;
+    if (p != NULL){
+        if (p->next != NULL){
+            g_ClientList = p->next;
+        }else{
+            g_ClientList = NULL;
+        }
+        return (p->client);
+    }else{
+        return (NULL);
+    }
+}
 
 const char* getMessageType(uint32_t i)
 {
@@ -168,12 +208,19 @@ int receiveFileData(int sockfd, int fsize)
     struct sockaddr_in  addr_con;
     FILE*               fp = NULL;
     int                 nBytes;
+    uint32_t            seq = 1;
+    
 
     // use receiveListen client information saved at 
     memcpy(&addr_con, &curr_addr, sizeof(struct sockaddr_in));
     while(fsize > 0){
         fprintf(stderr, "rcv:receiveFileData: calling rudpRecvfrom() ...\n");
         pdataRecord = rudpRecvfrom(sockfd, &msgRcd, &addr_con);
+        if (pdataRecord->seq != seq){
+            fprintf(stderr, "rcv:receiveFileData:ERROR: suppose to to receive seq (%d) "
+                " but received seq (%d)\n", seq, pdataRecord->seq);
+            exit(1);
+        }
         fsize -= pdataRecord->datasize;
         if (fp == NULL){
             fp = fopen(fileName, "w");
@@ -197,6 +244,7 @@ int receiveFileData(int sockfd, int fsize)
         fprintf(stderr, "rcv:receiveFileData: calling rudpSendTo() to send ACK for seq (%d)\n",
             pdataRecord->seq);
         rudpSendTo(sockfd, &msgRcd, &addr_con);
+        seq++;
     }
     
     // reset the curr_addr and counter
@@ -242,6 +290,9 @@ int serverListen(int sockfd)
     socklen_t           addrlen = sizeof(addr_con);
     char                buf[INET_ADDRSTRLEN];
 
+    // handle all clients in the linked-list
+    // TODO
+
     do{
         fprintf(stderr, "rcv:serverListen: calling recvfrom() ...\n");
         nBytes = recvfrom(sockfd, &msgRcd, sizeof(MessageRecord), sendrecvflag,
@@ -272,6 +323,7 @@ int serverListen(int sockfd)
     }else{
         // a new client, send FILE_STOP back to client
         rudpSendFileStartStop(&msgRcd, MSG_TYPE_FILE_STOP, sockfd, &addr_con);
+        addClient(&addr_con, fsize, fileName);
     }
     return (fsize);
 }
@@ -410,17 +462,17 @@ FILE* sendFileName(int sockfd, char* localFileName, char* remoteFileName, int* f
     
     fp = fopen(localFileName, "r");
     if (fp == NULL){
-        fprintf(stderr, "ERROR: local file name '%s' doesn't exist\n", localFileName);
+        fprintf(stderr, "ncp:sendFileName:ERROR: local file name '%s' doesn't exist\n", localFileName);
         exit (1);
     }
     ret = stat(localFileName, &statbuf);
     if (ret != 0){
-        fprintf(stderr, "ERROR: Cannot get file '%s' stat (%d)\n", localFileName, errno);
+        fprintf(stderr, "ncp:sendFileName:ERROR: Cannot get file '%s' stat (%d)\n", localFileName, errno);
         exit(1);
     }
     nBytes = statbuf.st_size;
     *fsize = nBytes;
-    fprintf(stderr, "ncp: file '%s' size '%d'\n", localFileName, nBytes);
+    fprintf(stderr, "ncp:sendFileName: file '%s' size '%d'\n", localFileName, nBytes);
 
     // pass the message type, remote file name and file size (in seq) to server
     memset(&msgRcd, 0, sizeof(MessageRecord));
@@ -428,10 +480,10 @@ FILE* sendFileName(int sockfd, char* localFileName, char* remoteFileName, int* f
     msgRcd.seq = htonl(nBytes);
     strcpy((char*) msgRcd.data, remoteFileName);
     // pass remote file name to server with send()
-    fprintf(stderr, "ncp: calling send() to send file name '%s' information\n", remoteFileName);
+    fprintf(stderr, "ncp:sendFileName: calling send() to send file name '%s' information\n", remoteFileName);
     nBytes = rudpSend(sockfd, &msgRcd);
     if (nBytes == (-1)){
-        fprintf(stderr, "ERROR: cannot send file name '%s' to server\n", remoteFileName);
+        fprintf(stderr, "ncp:sendFileName:ERROR: cannot send file name '%s' to server\n", remoteFileName);
         exit(1);
     }
 
