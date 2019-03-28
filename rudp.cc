@@ -54,6 +54,44 @@ static int          currentClient = 0;
 char                fileName[databuffersize];
 static ClientList*   g_ClientList = NULL;
 
+const char* getMessageType(uint32_t i)
+{
+    switch(i){
+    case MSG_TYPE_FILENAME:
+        return ("MSG_TYPE_FILENAME");
+        break;
+    case MSG_TYPE_FILE_DATA:
+        return ("MSG_TYPE_FILE_DATA");
+        break;
+    case MSG_TYPE_FILE_END:
+        return ("MSG_TYPE_FILE_END");
+        break;
+    case MSG_TYPE_FILE_START:
+        return ("MSG_TYPE_FILE_START");
+        break;
+    case MSG_TYPE_FILE_STOP:
+        return ("MSG_TYPE_FILE_STOP");
+        break;
+    case MSG_TYPE_ACK:
+        return ("MSG_TYPE_ACK");
+        break;
+    default:
+        return ("MSG_TYPE_INVALID");
+    }
+}
+
+void printDataRecord(int linenumber, DataRecord* pdatarecord)
+{
+    char    buf[21];
+
+    strncpy(buf, (char*) pdatarecord->data, 20);
+    fprintf(stderr, "printDataRecord(%d): msg type: %s, seq: %d, datasize:"
+        "%d, data:%s, ip: %s, port: %d\n",
+        linenumber, getMessageType(pdatarecord->msg_type),
+        pdatarecord->seq, pdatarecord->datasize, buf,
+        pdatarecord->ip, pdatarecord->port);
+}
+
 void addClient(struct sockaddr_in* paddr_con, int fsize, char* fileName)
 {
     fprintf(stderr, "rudp:addClient: fileName %s, fsize %d\n", fileName, fsize);
@@ -87,31 +125,6 @@ ClientList* removeClient()
     }
 }
 
-const char* getMessageType(uint32_t i)
-{
-    switch(i){
-    case MSG_TYPE_FILENAME:
-        return ("MSG_TYPE_FILENAME");
-        break;
-    case MSG_TYPE_FILE_DATA:
-        return ("MSG_TYPE_FILE_DATA");
-        break;
-    case MSG_TYPE_FILE_END:
-        return ("MSG_TYPE_FILE_END");
-        break;
-    case MSG_TYPE_FILE_START:
-        return ("MSG_TYPE_FILE_START");
-        break;
-    case MSG_TYPE_FILE_STOP:
-        return ("MSG_TYPE_FILE_STOP");
-        break;
-    case MSG_TYPE_ACK:
-        return ("MSG_TYPE_ACK");
-        break;
-    default:
-        return ("MSG_TYPE_INVALID");
-    }
-}
 void convertfrom(MessageRecord* pmsgRcd, struct sockaddr_in* paddr_con, DataRecord *pdataRecord)
 {
     char                buf[INET_ADDRSTRLEN];
@@ -237,10 +250,12 @@ int receiveFileData(int sockfd, int fsize)
     while(fsize > 0){
         // fprintf(stderr, "rcv:receiveFileData: calling rudpRecvfrom() ...\n");
         pdataRecord = rudpRecvfrom(sockfd, &msgRcd, &addr_con);
+        printDataRecord(__LINE__, pdataRecord);
 
         // if receive from same client currently receiving from continue rcving
         if (sameClient(&addr_con) == 1){
           // fprintf(stderr, "rcv:receiveFileData: same client\n");
+          printDataRecord(__LINE__, pdataRecord);
           if (pdataRecord->seq != seq){
               fprintf(stderr, "rcv:receiveFileData:ERROR: suppose to to receive seq (%d) "
                   " but received seq (%d)\n", seq, pdataRecord->seq);
@@ -274,7 +289,9 @@ int receiveFileData(int sockfd, int fsize)
         // if different client add client to pending client list
         else {
           // a new client, send FILE_STOP back to client
+          printDataRecord(__LINE__, pdataRecord);
           rudpSendFileStartStop(&msgRcd, MSG_TYPE_FILE_STOP, sockfd, &addr_con);
+          printDataRecord(__LINE__, pdataRecord);
           // file size is stored in seq on new client requests
           int fsize = pdataRecord->seq;
           strcpy(fileName, (char*) pdataRecord->data);
