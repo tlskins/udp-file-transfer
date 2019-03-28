@@ -52,10 +52,11 @@ typedef struct _ClientList{
 struct sockaddr_in  curr_addr;
 static int          currentClient = 0;
 char                fileName[databuffersize];
-static ClientList   g_ClientList = NULL;
+static ClientList*   g_ClientList = NULL;
 
 void addClient(struct sockaddr_in* paddr_con, int fsize, char* fileName)
 {
+    fprintf(stderr, "rudp:addClient: fileName %s, fsize %d\n", fileName, fsize);
     ClientList*     p = (ClientList*) malloc(sizeof(ClientList));
     memset(p, 0, sizeof(ClientList));
     p->client = (struct sockaddr_in*) malloc(sizeof(struct sockaddr_in));
@@ -80,7 +81,7 @@ ClientList* removeClient()
         }else{
             g_ClientList = NULL;
         }
-        return (p->client);
+        return (g_ClientList);
     }else{
         return (NULL);
     }
@@ -150,7 +151,7 @@ DataRecord* rudpRecvfrom(int sockfd, MessageRecord* pmsgRcd, struct sockaddr_in*
     socklen_t           addrlen = sizeof(struct sockaddr_in);
     DataRecord*         pDataRecord = NULL;
 
-    fprintf(stderr, "rudp:rudpRecvfrom: calling recvfrom() ...\n");
+    // fprintf(stderr, "rudp:rudpRecvfrom: calling recvfrom() ...\n");
     nBytes = recvfrom(sockfd, pmsgRcd, sizeof(MessageRecord), sendrecvflag,
         (sockaddr*) paddr_rev, &addrlen);
     if (nBytes == (-1)){
@@ -159,10 +160,10 @@ DataRecord* rudpRecvfrom(int sockfd, MessageRecord* pmsgRcd, struct sockaddr_in*
     }
     pDataRecord = (DataRecord*) malloc(sizeof(DataRecord));
     convertfrom(pmsgRcd, paddr_rev, pDataRecord);
-    fprintf(stderr, "rcv:rudpRecvfrom: type %s, receive %d bytes, sequence (%d) from '%s' port %d\n",
-            getMessageType(pDataRecord->msg_type),
-            pDataRecord->datasize, pDataRecord->seq,
-            pDataRecord->ip, pDataRecord->port);
+    // fprintf(stderr, "rcv:rudpRecvfrom: type %s, receive %d bytes, sequence (%d) from '%s' port %d\n",
+    //         getMessageType(pDataRecord->msg_type),
+    //         pDataRecord->datasize, pDataRecord->seq,
+    //         pDataRecord->ip, pDataRecord->port);
     return (pDataRecord);
 }
 
@@ -170,7 +171,7 @@ DataRecord* rudpRecvfrom(int sockfd, MessageRecord* pmsgRcd, struct sockaddr_in*
 int rudpSend(int sockfd, MessageRecord* pmsgRcd)
 {
     int                 nBytes;
-    
+
     fprintf(stderr, "rudpSend: calling send() to send\n");
     nBytes = send(sockfd, pmsgRcd, sizeof(MessageRecord), sendrecvflag);
     if (nBytes == (-1)){
@@ -186,12 +187,12 @@ int rudpSendTo(int sockfd, MessageRecord* pmsgRcd, struct sockaddr_in* paddr_con
     socklen_t           addrlen = sizeof(struct sockaddr);
     char                buf[INET_ADDRSTRLEN];
     struct sockaddr_in  sockaddr_local;
-    
+
     memcpy(&sockaddr_local, paddr_con, sizeof(struct sockaddr));
     inet_ntop(AF_INET, &sockaddr_local.sin_addr, buf, INET_ADDRSTRLEN);
 
-    fprintf(stderr, "rudpSendTo: calling sendto() to send to '%s', port %d\n",
-        buf, ntohs(sockaddr_local.sin_port));
+    // fprintf(stderr, "rudpSendTo: calling sendto() to send to '%s', port %d\n",
+    //     buf, ntohs(sockaddr_local.sin_port));
     nBytes = sendto(sockfd, pmsgRcd, sizeof(MessageRecord), sendrecvflag,
                 (struct sockaddr*) &sockaddr_local, addrlen);
     if (nBytes == (-1)){
@@ -199,6 +200,26 @@ int rudpSendTo(int sockfd, MessageRecord* pmsgRcd, struct sockaddr_in* paddr_con
         exit(nBytes);
     }
     return (nBytes);
+}
+
+int sameClient(struct sockaddr_in* addr_con)
+{
+    if ((curr_addr.sin_addr.s_addr == addr_con->sin_addr.s_addr) && (curr_addr.sin_port == addr_con->sin_port)){
+      return (1);
+    }else{
+      // this is a new client, save the client into linked-list and telling it to wait
+      fprintf(stderr, "rcv: ERROR: new client (ask to wait and saved to linked-list\n");
+      return (0);
+    }
+}
+
+int rudpSendFileStartStop(MessageRecord* pmsgRcd, int msg_type, int sockfd, struct sockaddr_in* paddr_con)
+{
+    memset(pmsgRcd, 0, sizeof(MessageRecord));
+    pmsgRcd->msg_type = htonl(msg_type);
+    fprintf(stderr, "rcv:rudpSendFileStartStop: calling rudpSendTo() to send (%s) ...\n",
+        getMessageType(msg_type));
+    return rudpSendTo(sockfd, pmsgRcd, paddr_con);
 }
 
 int receiveFileData(int sockfd, int fsize)
@@ -209,44 +230,59 @@ int receiveFileData(int sockfd, int fsize)
     FILE*               fp = NULL;
     int                 nBytes;
     uint32_t            seq = 1;
-    
 
-    // use receiveListen client information saved at 
+
+    // use receiveListen client information saved at
     memcpy(&addr_con, &curr_addr, sizeof(struct sockaddr_in));
     while(fsize > 0){
-        fprintf(stderr, "rcv:receiveFileData: calling rudpRecvfrom() ...\n");
+        // fprintf(stderr, "rcv:receiveFileData: calling rudpRecvfrom() ...\n");
         pdataRecord = rudpRecvfrom(sockfd, &msgRcd, &addr_con);
-        if (pdataRecord->seq != seq){
-            fprintf(stderr, "rcv:receiveFileData:ERROR: suppose to to receive seq (%d) "
-                " but received seq (%d)\n", seq, pdataRecord->seq);
-            exit(1);
-        }
-        fsize -= pdataRecord->datasize;
-        if (fp == NULL){
-            fp = fopen(fileName, "w");
-            if (fp == NULL){
-                fprintf(stderr, "rcv:receiveFileData: cannot open file '%s' for write\n",
-                    fileName);
-                exit (1);
-            }
-        }
-        nBytes = fwrite(pdataRecord->data, 1, pdataRecord->datasize, fp);
-        if (nBytes != pdataRecord->datasize){
-            fprintf(stderr, "rcv:receiveFileData: suppose to write %d bytes but "
-                " written %d bytes\n", pdataRecord->datasize, nBytes);
-            exit(1);
-        }
 
-        // send ack back to client
-        memset(&msgRcd, 0, sizeof(MessageRecord));
-        msgRcd.msg_type = htonl(MSG_TYPE_ACK);
-        msgRcd.seq = htonl(pdataRecord->seq);
-        fprintf(stderr, "rcv:receiveFileData: calling rudpSendTo() to send ACK for seq (%d)\n",
-            pdataRecord->seq);
-        rudpSendTo(sockfd, &msgRcd, &addr_con);
-        seq++;
+        // if receive from same client currently receiving from continue rcving
+        if (sameClient(&addr_con) == 1){
+          // fprintf(stderr, "rcv:receiveFileData: same client\n");
+          if (pdataRecord->seq != seq){
+              fprintf(stderr, "rcv:receiveFileData:ERROR: suppose to to receive seq (%d) "
+                  " but received seq (%d)\n", seq, pdataRecord->seq);
+              exit(1);
+          }
+          fsize -= pdataRecord->datasize;
+          if (fp == NULL){
+              fp = fopen(fileName, "w");
+              if (fp == NULL){
+                  fprintf(stderr, "rcv:receiveFileData: cannot open file '%s' for write\n",
+                      fileName);
+                  exit (1);
+              }
+          }
+          nBytes = fwrite(pdataRecord->data, 1, pdataRecord->datasize, fp);
+          if (nBytes != pdataRecord->datasize){
+              fprintf(stderr, "rcv:receiveFileData: suppose to write %d bytes but "
+                  " written %d bytes\n", pdataRecord->datasize, nBytes);
+              exit(1);
+          }
+
+          // send ack back to client
+          memset(&msgRcd, 0, sizeof(MessageRecord));
+          msgRcd.msg_type = htonl(MSG_TYPE_ACK);
+          msgRcd.seq = htonl(pdataRecord->seq);
+          // fprintf(stderr, "rcv:receiveFileData: calling rudpSendTo() to send ACK for seq (%d)\n",
+          //     pdataRecord->seq);
+          rudpSendTo(sockfd, &msgRcd, &addr_con);
+          seq++;
+        }
+        // if different client add client to pending client list
+        else {
+          // a new client, send FILE_STOP back to client
+          rudpSendFileStartStop(&msgRcd, MSG_TYPE_FILE_STOP, sockfd, &addr_con);
+          // file size is stored in seq on new client requests
+          int fsize = pdataRecord->seq;
+          strcpy(fileName, (char*) pdataRecord->data);
+          fprintf(stderr, "rcv:receiveFileData: detected new client request: fsize %d, fileName %s, data %s\n", fsize, fileName, (char*) pdataRecord->data);
+          addClient(&addr_con, fsize, fileName);
+        }
     }
-    
+
     // reset the curr_addr and counter
     currentClient--;
     memset(&curr_addr, 0, sizeof(struct sockaddr_in));
@@ -258,25 +294,26 @@ int receiveFileData(int sockfd, int fsize)
     return (fsize);
 }
 
-int sameClient(struct sockaddr_in* addr_con)
+int trackClient(int sockfd, struct sockaddr_in* addr_con, MessageRecord* msgRcd)
 {
-    int ret = memcmp(&curr_addr, &addr_con, sizeof(struct sockaddr_in));
-    if (ret != 0){
-        // this is a new client, save the client into linked-list and telling it to wait
-        fprintf(stderr, "rcv: ERROR: new client (ask to wait and saved to linked-list\n");
-        return (0);
-    }else{
-        return (1);
-    }
-}
+  // remember my current client so we know we are dealng with the same client
+  if (currentClient == 0){
+      memcpy(&curr_addr, addr_con, sizeof(struct sockaddr_in));
+      currentClient++;
+      rudpSendFileStartStop(msgRcd, MSG_TYPE_FILE_START, sockfd, addr_con);
+  }else if (currentClient == 1 && sameClient(addr_con) == 1){
+      // we deal with the same client, send FILE_START back to client
+      rudpSendFileStartStop(msgRcd, MSG_TYPE_FILE_START, sockfd, addr_con);
+  }else{
+      // a new client, send FILE_STOP back to client
+      rudpSendFileStartStop(msgRcd, MSG_TYPE_FILE_STOP, sockfd, addr_con);
+      // file size is stored in seq on new client requests
+      int fsize = ntohl(msgRcd->seq);
+      strcpy(fileName, (char*) msgRcd->data);
+      addClient(addr_con, fsize, fileName);
+  }
 
-int rudpSendFileStartStop(MessageRecord* pmsgRcd, int msg_type, int sockfd, struct sockaddr_in* paddr_con)
-{
-    memset(pmsgRcd, 0, sizeof(MessageRecord));
-    pmsgRcd->msg_type = htonl(msg_type);
-    fprintf(stderr, "rcv:rudpSendFileStartStop: calling rudpSendTo() to send (%s) ...\n",
-        getMessageType(msg_type));
-    return rudpSendTo(sockfd, pmsgRcd, paddr_con);
+  return (0);
 }
 
 // return the transmitted file size so server can count the left size
@@ -290,41 +327,39 @@ int serverListen(int sockfd)
     socklen_t           addrlen = sizeof(addr_con);
     char                buf[INET_ADDRSTRLEN];
 
-    // handle all clients in the linked-list
-    // TODO
+    if (g_ClientList == NULL){
+      do{
+          fprintf(stderr, "rcv:serverListen: calling recvfrom() ...\n");
+          nBytes = recvfrom(sockfd, &msgRcd, sizeof(MessageRecord), sendrecvflag,
+              (struct sockaddr*) &addr_con, &addrlen);
+          if (nBytes == (-1)){
+              fprintf(stderr, "ncv: ERROR: recvfrom() return (%d}\n", errno);
+              exit(1);
+          }
+          msg_type = ntohl(msgRcd.msg_type);
+      } while(msg_type != MSG_TYPE_FILENAME);
 
-    do{
-        fprintf(stderr, "rcv:serverListen: calling recvfrom() ...\n");
-        nBytes = recvfrom(sockfd, &msgRcd, sizeof(MessageRecord), sendrecvflag,
-            (struct sockaddr*) &addr_con, &addrlen);
-        if (nBytes == (-1)){
-            fprintf(stderr, "ncv: ERROR: recvfrom() return (%d}\n", errno);
-            exit(1);
-        }
-        msg_type = ntohl(msgRcd.msg_type);
-    } while(msg_type != MSG_TYPE_FILENAME);
+      fsize = ntohl(msgRcd.seq);
+      strcpy(fileName, (char*) msgRcd.data);
+    } else {
+      fprintf(stderr, "rcv:serverListen: g_ClientList not null ...\n");
+      nBytes = -1;
+      fsize = g_ClientList->fsize;
+      strcpy(fileName, g_ClientList->fileName);
+      memset(&addr_con, 0, sizeof(struct sockaddr_in));
+      addr_con.sin_family = g_ClientList->client->sin_family;
+      addr_con.sin_port = g_ClientList->client->sin_port;
+      addr_con.sin_addr.s_addr = g_ClientList->client->sin_addr.s_addr;
+      g_ClientList = g_ClientList->next;
+    }
 
     // save file size and name
-    fsize = ntohl(msgRcd.seq);
-    strcpy(fileName, (char*) msgRcd.data);
     printf("rcv:serverListen: Receive %d bytes, file name: %s, size %d from %s port %d\n",
            nBytes, (char*) msgRcd.data, fsize,
            inet_ntop(AF_INET, &addr_con.sin_addr, buf, INET_ADDRSTRLEN),
            ntohs(addr_con.sin_port));
 
-    // remember my current client so we know we are dealng with the same client
-    if (currentClient == 0){
-        memcpy(&curr_addr, &addr_con, sizeof(struct sockaddr_in));
-        currentClient++;
-        rudpSendFileStartStop(&msgRcd, MSG_TYPE_FILE_START, sockfd, &addr_con);
-    }else if (currentClient == 1 && sameClient(&addr_con) == 1){
-        // we deal with the same client, send FILE_START back to client
-        rudpSendFileStartStop(&msgRcd, MSG_TYPE_FILE_START, sockfd, &addr_con);
-    }else{
-        // a new client, send FILE_STOP back to client
-        rudpSendFileStartStop(&msgRcd, MSG_TYPE_FILE_STOP, sockfd, &addr_con);
-        addClient(&addr_con, fsize, fileName);
-    }
+    trackClient(sockfd, &addr_con, &msgRcd);
     return (fsize);
 }
 
@@ -459,7 +494,7 @@ FILE* sendFileName(int sockfd, char* localFileName, char* remoteFileName, int* f
     int                 ret;
     struct sockaddr_in  addr_rec;
     DataRecord*         pDataRecord = NULL;
-    
+
     fp = fopen(localFileName, "r");
     if (fp == NULL){
         fprintf(stderr, "ncp:sendFileName:ERROR: local file name '%s' doesn't exist\n", localFileName);
@@ -507,7 +542,7 @@ int sendFileData(int sockfd, FILE* fp)
     int                 endOfFile = 0;
     int                 totalBytes = 0;
     struct sockaddr_in  addr_rec;
-    
+
     do {
         seq++;
         memset(&msgRcd, 0, sizeof(MessageRecord));
@@ -527,7 +562,7 @@ int sendFileData(int sockfd, FILE* fp)
         }
         msgRcd.datasize = htonl(nBytes);
         totalBytes += nBytes;
-        
+
         // we has nBytes in the buffer, send it out
         fprintf(stderr, "ncp:sendFileData: rudpSend() (%d) bytes, sequence (%d) to server\n",
             nBytes, seq);
